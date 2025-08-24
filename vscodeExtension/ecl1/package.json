@@ -72,6 +72,10 @@
       {
         "command": "ecl1.runJar.git-batch-pull",
         "title": "Ecl1: Git Batch Pull"
+      },
+      {
+        "command": "ecl1.runAntInstrumentAll",
+        "title": "Ecl1: Instrument all Project"
       }
     ],
     "menus": {

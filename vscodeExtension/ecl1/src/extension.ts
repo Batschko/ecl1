@@ -230,7 +230,19 @@ export async function activate(context: vscode.ExtensionContext) {
         settingsTreeDataProvider.refresh();
     });
 
-    context.subscriptions.push(commandTreeDataProvider, refreshCommands, settingsTreeDataProvider, refreshSettings, toggleSetting, configurationChangeListener);
+    const runAntInstrumentCommand = vscode.commands.registerCommand('ecl1.runAntInstrumentAll', () => {
+        let buildFiles = [];
+        for(const extension of getInstrumentedExtensions()){
+            buildFiles.push(path.resolve(extension, "build.xml"));
+        }
+        //Add webapps
+        buildFiles.push(path.resolve(getInnerWorkspaceFolder(), "../webapps/qisserver/WEB-INF/internal/export/build.xml"));
+        for(const buildFilePath of buildFiles){
+            runAntInstrument(buildFilePath);
+        }
+    });
+
+    context.subscriptions.push(commandTreeDataProvider, refreshCommands, settingsTreeDataProvider, refreshSettings, toggleSetting, configurationChangeListener, runAntInstrumentCommand);
 }
 
 export function deactivate() {
