@@ -11,9 +11,8 @@ const WORKSPACE_FOLDER = vscode.workspace.workspaceFolders ? vscode.workspace.wo
 
 
 class Ecl1CommandTreeItem extends vscode.TreeItem {
-    constructor(public readonly name: string) {
+    constructor(public readonly name: string,commandId: string){
         super(name, vscode.TreeItemCollapsibleState.None);
-        const commandId = `ecl1.runJar.${getCommandIdFromName(name)}`;
         this.tooltip = `Run ${name}`;
         this.iconPath = new vscode.ThemeIcon("run");
         this.command = {
@@ -36,7 +35,17 @@ class Ecl1CommandTreeDataProvider implements vscode.TreeDataProvider<vscode.Tree
     }
 
     async getChildren(): Promise<vscode.TreeItem[]> {
-        return Object.keys(ecl1Jars).map(name => new Ecl1CommandTreeItem(name));
+        // Items from ecl1Jars
+        const jarItems = Object.keys(ecl1Jars).map(name =>
+             new Ecl1CommandTreeItem(name,`ecl1.runJar.${getCommandIdFromName(name)}`)
+        );
+
+        // Extra items
+        const extraItems = [
+            new Ecl1CommandTreeItem("Instrument all Projects", "ecl1.runAntInstrumentAll"),
+        ];
+
+        return [...jarItems, ...extraItems];
     }
 
     dispose(): void {
