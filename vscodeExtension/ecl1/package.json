@@ -116,6 +116,11 @@
           "type": "boolean",
           "default": true,
           "description": "Set git.RepositoryScanMaxDepth to 2 (requires window reload)."
+        },
+        "ecl1.autoInstrument": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable or disable automatic instrumentation of projects."
         }
       }
     }

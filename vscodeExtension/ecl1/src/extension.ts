@@ -124,6 +124,9 @@ const ecl1Jars: { [key: string]: string } = {
     "Git Batch Pull": "jars/net.sf.ecl1.git.batch-pull-button-all.jar"
 };
 
+const instrumentBuildWatchers = new Map<string, vscode.FileSystemWatcher>();
+const debounceTimers = new Map<string, NodeJS.Timeout>();
+const ignoreBuildWatcherEvents = new Map<string, boolean>();
 
 export async function activate(context: vscode.ExtensionContext) {
     // Only activate in HisInOne workspace
@@ -144,6 +147,11 @@ export async function activate(context: vscode.ExtensionContext) {
     setGitRepositoryScanMaxDepth();
 
     startEcl1AutostartTasks(context.extensionPath);
+
+    const configuration = vscode.workspace.getConfiguration();
+    if(configuration.get<boolean>("ecl1.autoInstrument")) {
+        enableAutomaticInstrumentation(context);
+    }
     
     // Register commands tree view
     const commandTreeDataProvider = new Ecl1CommandTreeDataProvider();
@@ -210,6 +218,13 @@ export async function activate(context: vscode.ExtensionContext) {
                   vscode.commands.executeCommand("workbench.action.reloadWindow");
                 }
               });
+        // Enable automatic instrumentation if set
+        }else if (e.affectsConfiguration('ecl1.autoInstrument')) {
+            if(configuration.get<boolean>('ecl1.autoInstrument')) {
+                enableAutomaticInstrumentation(context);
+            }else{
+                disableAutomaticInstrumentation();
+            }
         }
         // Refresh settings view after changes
         settingsTreeDataProvider.refresh();
@@ -225,6 +240,10 @@ export function deactivate() {
     for (const name in outputChannels) {
         outputChannels[name].dispose();
     }
+    for (const timer of debounceTimers.values()) {
+        clearTimeout(timer);
+    }
+    debounceTimers.clear();
 }
 
 /**
@@ -483,4 +502,182 @@ function writeExclusionsToFile(fileNames: Array<string>) {
             vscode.window.showErrorMessage('Failed to write file excludedNames.txt: ' + err.message);
         }
     });
+}
+
+
+/**
+ * Runs a local Ant process to execute the `instrumentEntities` target
+ * for the given build file.
+ * 
+ * @param buildFilePath buildFilePath
+ */
+function runAntInstrument(buildFilePath: string) {
+    const antLibDir = path.resolve(getInnerWorkspaceFolder(), "../webapps/qisserver/WEB-INF/internal/ant/lib");
+    const projectName = getProjectNameFromBuildFile(buildFilePath);
+
+    // block Watcher for project
+    ignoreBuildWatcherEvents.set(projectName, true);
+
+    const output = getOutputChannelByName("ecl1: instrument " + projectName);
+    output.show();
+
+    const command = 'java';
+    const args = [
+        '-cp', `${antLibDir}/ant-launcher.jar`,
+        '-Dstarted.from.eclipse',
+        'org.apache.tools.ant.launch.Launcher',
+        '-buildfile', buildFilePath,
+        'instrumentEntities'
+    ];
+
+    const process = spawn(command, args, { stdio: 'pipe' });
+
+    process.stdout.on('data', (data) => output.append(data.toString()));
+    process.stderr.on('data', (data) => output.append(data.toString()));
+
+    process.on('close', (code) => {
+        // unblock Watcher for project
+        ignoreBuildWatcherEvents.set(projectName, false);
+        console.log(`Ant process finished with code ${code}`);
+    });
+}
+
+/**
+ * Enables automatic instrumentation for all projects.
+ *
+ * @param context ExtensionContext
+ */
+function enableAutomaticInstrumentation(context: vscode.ExtensionContext){
+    for(const extensionPath of getInstrumentedExtensions()){
+        registerInstrumentBuildWatcher(context, path.resolve(extensionPath, "bin"), path.resolve(extensionPath, "build.xml"));
+    }
+    //Add Webapps
+    registerInstrumentBuildWatcher(context, path.resolve(getInnerWorkspaceFolder(), "../webapps/qisserver/WEB-INF/classes/"),path.resolve(getInnerWorkspaceFolder(), "../webapps/qisserver/WEB-INF/internal/export/build.xml"));
+}
+
+/**
+ * Disables automatic instrumentation for all projects.
+ * 
+ * This function disposes all active Java-build-watchers and clears
+ * all pending debounce timers.
+ */
+function disableAutomaticInstrumentation(){
+    for(const watcher of instrumentBuildWatchers.values()) {
+        watcher.dispose();
+    }
+    instrumentBuildWatchers.clear(); 
+
+    for(const timer of debounceTimers.values()) {
+        clearTimeout(timer);
+    }
+    debounceTimers.clear();
+}
+
+/**
+ * 
+ * @param context ExtensionContext
+ * @param watchPath watchPath
+ * @param buildFilePath buildFilePath
+ */
+function registerInstrumentBuildWatcher(context: vscode.ExtensionContext, watchPath: string, buildFilePath: string) {
+    console.log("Registered Java Build Watcher:");
+    console.log(`\twatchPath: ${watchPath}`);
+    console.log(`\tbuildFilePath: ${buildFilePath}`);
+    const projectName = getProjectNameFromBuildFile(buildFilePath);
+
+    // Watch for Java build output
+    const watcher = vscode.workspace.createFileSystemWatcher(`${watchPath}/**/*.class`); 
+
+    const onClassFileDetected = (uri: vscode.Uri) => {
+        if (ignoreBuildWatcherEvents.get(projectName)) {
+            //Ignore watcher event during instrumentation
+            return;
+        }
+        // Reset debounce timer
+        if (debounceTimers.get(projectName)) {
+            clearTimeout(debounceTimers.get(projectName));
+        }
+
+        debounceTimers.set(projectName, setTimeout(() => {
+            onBuildFinished(buildFilePath);
+        }, 5000));
+    };  
+    watcher.onDidCreate(onClassFileDetected);
+    watcher.onDidChange(onClassFileDetected);
+    instrumentBuildWatchers.set(projectName, watcher);
+    context.subscriptions.push(watcher);
+}
+
+
+
+/** Call {@link runAntInstrument} if no errors are present after a build */
+function onBuildFinished(buildFilePath: string) {
+    console.log('Build finished (detected). for:'+buildFilePath);
+    const projectName = getProjectNameFromBuildFile(buildFilePath);
+    if (hasJavaErrors(projectName)) {
+      console.log('Skipping post-build actions due to Java errors.');
+      return;
+    }   
+    vscode.window.showInformationMessage('Java build finished with no errors');
+    runAntInstrument(buildFilePath);
+}
+
+/**
+ * Checks if there are any Java compilation errors in a given project.
+ * 
+ * @param projectName project name
+ * @returns true if any Java errors exist in the project
+ */
+function hasJavaErrors(projectName: string): boolean {
+    const allDiagnostics = vscode.languages.getDiagnostics();
+    const javaDiagnostics = allDiagnostics.filter(([uri]) => uri.fsPath.endsWith('.java') && uri.path.includes(projectName)); 
+    for (const [uri, diags] of javaDiagnostics) {
+        const errors = diags.filter(d => d.severity === vscode.DiagnosticSeverity.Error);
+        if (errors.length > 0) {
+            console.log(`Errors found in ${uri.fsPath}:`);
+            return true;
+        }
+    }   
+    return false;
+}
+
+/**
+ * Get extensions to instrument by looking for the instrumented-entities.xml file.
+ * 
+ * @returns An array of extension paths that should be instrumented.
+ */
+function getInstrumentedExtensions(){
+    const instrumentEntitiesPath = "buildscripts/instrumented-entities.xml";
+    let extensionPaths = [];
+    const innerWsPath = getInnerWorkspaceFolder();
+    const outerWsPath = path.resolve(innerWsPath, "..");
+    const innerWsProjects = getProjects(innerWsPath);
+    const outerWsProjects =  getProjects(outerWsPath);
+    for (const projectName of innerWsProjects) {
+        const extensionPath = path.resolve(innerWsPath, projectName);
+        if(existsSync(path.resolve(extensionPath, instrumentEntitiesPath))){
+            extensionPaths.push(extensionPath);
+        }
+    }
+    for (const projectName of outerWsProjects) {
+        const extensionPath = path.resolve(outerWsPath, projectName);
+
+        if(existsSync(path.resolve(extensionPath, instrumentEntitiesPath))){  
+            extensionPaths.push(extensionPath);
+        }
+    }
+
+    console.log("Found extensions to instrument: ", extensionPaths);
+    return extensionPaths;
+}
+
+function getProjectNameFromBuildFile(buildFilePath: string){
+    // Get the folder containing the file
+    const parentDir = path.dirname(buildFilePath);
+    // Get the name of that folder
+    let name = path.basename(parentDir);
+    if(name==="export"){
+        name = "webapps";
+    }
+    return name;
 }
