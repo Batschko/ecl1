@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import path from 'path';
 import { readdirSync, existsSync, mkdirSync,
-        writeFile, readFile, unlink } from 'fs';
+        writeFile, readFile, unlink} from 'fs';
 
 /** Keep value in sync with activationEvents in package.json */
 const INNER_WORKSPACE_NAMES = ['eclipse-workspace','workspace'];
@@ -251,8 +251,66 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    forceECJSettings();
+
     context.subscriptions.push(commandTreeDataProvider, refreshCommands, settingsTreeDataProvider, refreshSettings, toggleSetting, configurationChangeListener, runAntInstrumentCommand);
 }
+
+
+function forceECJSettings() {
+    const prefsFilePath = ".settings/org.eclipse.jdt.core.prefs";
+    let settingsPaths = [];
+    settingsPaths.push(path.resolve(getInnerWorkspaceFolder(), '../webapps', prefsFilePath));
+    const innerWsPath = getInnerWorkspaceFolder();
+    const outerWsPath = path.resolve(innerWsPath, "..");
+    const innerWsProjects = getProjects(innerWsPath);
+    const outerWsProjects =  getProjects(outerWsPath);
+    for (const projectName of innerWsProjects) {
+        const extensionPath = path.resolve(innerWsPath, projectName);
+        if(existsSync(path.resolve(extensionPath, prefsFilePath))){
+            settingsPaths.push(extensionPath);
+        }
+    }
+    for (const projectName of outerWsProjects) {
+        const extensionPath = path.resolve(outerWsPath, projectName);
+        if(existsSync(path.resolve(extensionPath, prefsFilePath))){  
+            settingsPaths.push(extensionPath);
+        }
+    }
+
+  const fixSetting = (prefsFile: string) => {
+    readFile(prefsFile, 'utf8', (err, data) => {
+      if (err) {
+        // Could be file not found, ignore
+        return;
+      }
+      if (data.includes('org.eclipse.jdt.core.compiler.problem.potentialNullReference=ignore')) {
+        const updated = data.replace(
+          'org.eclipse.jdt.core.compiler.problem.potentialNullReference=ignore',
+          'org.eclipse.jdt.core.compiler.problem.potentialNullReference=warning'
+        );
+        writeFile(prefsFile, updated, 'utf8', (writeErr) => {
+          if (writeErr) {
+            console.error(`Error writing prefs file: ${writeErr}`);
+          } else {
+            console.log('Changed potentialNullReference to warning');
+          }
+        });
+      }
+    });
+  };
+
+for (const prefsFile of settingsPaths) {
+    const watcher = vscode.workspace.createFileSystemWatcher(prefsFile);
+    watcher.onDidCreate(uri => fixSetting(uri.fsPath));
+    watcher.onDidChange(uri => fixSetting(uri.fsPath));
+    // run once initially
+    fixSetting(prefsFile);
+}
+ 
+
+}
+
 
 export function deactivate() {
     // Deactivate sidebar, reset context key
