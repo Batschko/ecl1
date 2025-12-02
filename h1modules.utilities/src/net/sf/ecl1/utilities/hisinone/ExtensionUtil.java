@@ -29,21 +29,21 @@ public class ExtensionUtil {
     private ExtensionUtil() {
     	// singleton
     }
-    
+
     /**
      * @return the single ExtensionUtil instance
      */
     public static ExtensionUtil getInstance() {
     	return INSTANCE;
     }
-    
+
     /**
      * Find the webapps project in the workspace if there is one.
      */
     public void updateWebappsProjectReference() {
         webappsProject = WebappsUtil.findWebappsProject();
     }
-    
+
     /**
      * checks if an extension jar in webapps project exists
      *
@@ -51,6 +51,9 @@ public class ExtensionUtil {
      * @return
      */
     public boolean doesExtensionJarExist(String extension) {
+        if (webappsProject == null) {
+            updateWebappsProjectReference();
+        }
         if (webappsProject != null) {
             IPath extensionJarPath = new Path(HisConstants.EXTENSIONS_FOLDER).append(extension).addFileExtension("jar");
             return webappsProject.exists(extensionJarPath);
@@ -93,8 +96,8 @@ public class ExtensionUtil {
         // TODO evaluate deactivated-extensions.txt and override extension jars with extension projects only if the project is not deactivated
         return extensions;
     }
-    
-    
+
+
     /**
      * Scan for jar files in the extensions folder of the webapps project.
      *
@@ -102,6 +105,9 @@ public class ExtensionUtil {
      * @param extensions the map from extension names to extension project/jar names, will be updated by this method
      */
     public void scanForExtensionJars(TreeMap<String, String> extensions) {
+        if (webappsProject == null) {
+            updateWebappsProjectReference();
+        }
         // scan folder webapps/qisserver/WEB-INF/extensions/ for extension jars
         if (webappsProject != null) {
             IFolder extensionsFolder = webappsProject.getFolder(HisConstants.EXTENSIONS_FOLDER);
